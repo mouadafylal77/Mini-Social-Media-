@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MiniSocial - Réseau social décentralisé</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 640px; margin: 20px auto; padding: 0 12px; background: #f4f6f8; color: #222; }
+    h1 { text-align: center; }
+    .card { background: #fff; border-radius: 8px; padding: 14px; margin-bottom: 14px; box-shadow: 0 1px 4px rgba(0,0,0,.12); }
+    input, button { width: 100%; padding: 9px; margin-top: 8px; box-sizing: border-box; font-size: 14px; }
+    button { background: #3b5bdb; color: #fff; border: none; border-radius: 6px; cursor: pointer; }
+    button:disabled { background: #999; cursor: not-allowed; }
+    .meta { font-size: 12px; color: #666; margin-bottom: 6px; word-break: break-all; }
+    .msg { font-size: 16px; white-space: pre-wrap; word-break: break-word; }
+    .post img { max-width: 100%; margin-top: 8px; border-radius: 6px; }
+    #status { font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h1>MiniSocial</h1>
+
+  <!-- Connexion -->
+  <div class="card">
+    <button id="connectBtn">Se connecter à MetaMask</button>
+    <div id="account" class="meta"></div>
+  </div>
+
+  <!-- Formulaire -->
+  <div class="card">
+    <input id="message" type="text" placeholder="Votre message" maxlength="280">
+    <input id="mediaUrl" type="text" placeholder="URL d'une image (optionnel, https://...)">
+    <button id="publishBtn" disabled>Publier</button>
+    <div id="status"></div>
+  </div>
+
+  <!-- Fil d'actualité -->
+  <div class="card"><strong>Fil d'actualité</strong> <button id="refreshBtn" style="width:auto;float:right;margin:0">Rafraîchir</button></div>
+  <div id="feed"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/web3@1.10.0/dist/web3.min.js"></script>
+  <script>
+    // ====== À MODIFIER : adresse du contrat déployé sur Sepolia ======
+    const CONTRACT_ADDRESS = "0x618a359227536fF51165f994FCf931c87CD7f920";
+    // ================================================================
+
+    const SEPOLIA_CHAIN_ID = "0xaa36a7";
+
+    const ABI = [
+      { "inputs": [{ "internalType": "string", "name": "_message", "type": "string" }, { "internalType": "string", "name": "_mediaUrl", "type": "string" }], "name": "publishPost", "outputs": [], "stateMutability": "nonpayable", "type": "function" },
+      { "inputs": [{ "internalType": "uint256", "name": "index", "type": "uint256" }], "name": "getPost", "outputs": [{ "internalType": "string", "name": "", "type": "string" }, { "internalType": "string", "name": "", "type": "string" }, { "internalType": "address", "name": "", "type": "address" }, { "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" },
+      { "inputs": [], "name": "getTotalPosts", "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }], "stateMutability": "view", "type": "function" }
+    ];
+
+    let web3, contract, currentAccount = null;
+
+    const $ = (id) => document.getElementById(id);
+    const setStatus = (t) => { $("status").textContent = t; };   // textContent : pas de HTML interprété
+
+    // ---------- Connexion MetaMask ----------
+    async function connect() {
+      if (!window.ethereum) { alert("MetaMask n'est pas installé."); return; }
+      try {
+        const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
+        const chainId = await window.ethereum.request({ method: "eth_chainId" });
+        if (chainId !== SEPOLIA_CHAIN_ID) {
+          alert("Veuillez passer MetaMask sur le réseau Sepolia.");
+          return;
+        }
+        web3 = new Web3(window.ethereum);
+        contract = new web3.eth.Contract(ABI, CONTRACT_ADDRESS);
+        currentAccount = accounts[0];
+        $("account").textContent = "Connecté : " + currentAccount;
+        $("publishBtn").disabled = false;
+        loadFeed();
+      } catch (e) {
+        setStatus("Connexion refusée : " + e.message);
+      }
+    }
+
+    // ---------- Publication ----------
+    async function publish() {
+      const message = $("message").value.trim();
+      const mediaUrl = $("mediaUrl").value.trim();
+      if (!message) { setStatus("Le message est vide."); return; }
+
+      $("publishBtn").disabled = true;
+      setStatus("Transaction en cours, confirmez dans MetaMask...");
+      try {
+        await contract.methods.publishPost(message, mediaUrl).send({ from: currentAccount });
+        setStatus("Post publié !");
+        $("message").value = "";
+        $("mediaUrl").value = "";
+        loadFeed();
+      } catch (e) {
+        setStatus("Erreur : " + e.message);
+      }
+      $("publishBtn").disabled = false;
+    }
+
+    // ---------- Lecture du fil (du plus récent au plus ancien) ----------
+    async function loadFeed() {
+      const feed = $("feed");
+      feed.textContent = "";
+      try {
+        const total = Number(await contract.methods.getTotalPosts().call());
+        if (total === 0) { feed.textContent = "Aucun post pour le moment."; return; }
+
+        for (let i = total - 1; i >= 0; i--) {
+          const p = await contract.methods.getPost(i).call();
+          feed.appendChild(renderPost(p[0], p[1], p[2], p[3]));
+        }
+      } catch (e) {
+        feed.textContent = "Erreur de lecture : " + e.message;
+      }
+    }
+
+    // Construction du DOM avec textContent (protection XSS) : jamais d'innerHTML avec des données utilisateur
+    function renderPost(message, mediaUrl, author, timestamp) {
+      const div = document.createElement("div");
+      div.className = "card post";
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = author + " • " + new Date(Number(timestamp) * 1000).toLocaleString("fr-FR");
+
+      const msg = document.createElement("div");
+      msg.className = "msg";
+      msg.textContent = message;
+
+      div.appendChild(meta);
+      div.appendChild(msg);
+
+      // L'image n'est affichée que si l'URL commence par http(s) (bloque javascript:, data:, etc.)
+      if (/^https?:\/\//i.test(mediaUrl)) {
+        const img = document.createElement("img");
+        img.src = mediaUrl;
+        img.alt = "image du post";
+        img.referrerPolicy = "no-referrer";
+        div.appendChild(img);
+      }
+      return div;
+    }
+
+    $("connectBtn").addEventListener("click", connect);
+    $("publishBtn").addEventListener("click", publish);
+    $("refreshBtn").addEventListener("click", () => contract && loadFeed());
+  </script>
+</body>
+</html>
