@@ -48,6 +48,3 @@ Seule l'URL de l'image est stockée on-chain, le fichier reste hors-chaîne pour
 
 Solidity, Remix IDE, MetaMask, Sepolia, HTML/JavaScript, Web3.js
 
-## Auteur
-
-Nom Prénom, filière, année : *à compléter*
